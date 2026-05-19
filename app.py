@@ -1,38 +1,61 @@
+import os
 from agent import borrow
-from floe_client import instant_borrow
 from dotenv import load_dotenv
+import floe_client 
+
 load_dotenv()
 
+SESSION_MAX_CAP = 100.0
 
-def run():
-    scenarios = [
-        {"task_value": 100, "cost": 30},  
-        {"task_value": 20, "cost": 30},   
-        {"task_value": 80, "cost": 80},   
-    ]
+def run() -> None:
+  """Iterates through execution targets to evaluate and process credit lines."""
+  if not os.getenv("AGENT_API_KEY"):
+    print("ERROR: 'AGENT_API_KEY' is missing from environment setup.\n")
+    return
+  
+  floe_client.set_spend_limit(SESSION_MAX_CAP)
+  print(f"Set session spend limit to ${SESSION_MAX_CAP} USDC.\n")
 
-    print("Starting agent...\n")
+  scenarios = [
+      {"task_value": 100.0, "cost": 30.0},
+      {"task_value": 20.0, "cost": 30.0},
+      {"task_value": 80.0, "cost": 80.0},
+  ]
 
-    for s in scenarios:
-        print("\n--- New Scenario ---")
-        print(f"Task Value: {s['task_value']}, Cost: {s['cost']}")
-        print(f"Profit estimate: {s['task_value'] - s['cost']}")
+  print("Starting agent profile run...\n")
 
-        if borrow(s["task_value"], s["cost"]):
-            print("Decision: Borrow")
+  for i, step in enumerate(scenarios, start=1):
+    print(f"\n--- Scenario Step [{i}] ---")
 
-            try:
-                loan = instant_borrow(s["cost"])
-                print("Borrow success:", loan)
+    # Guardrail 1: Check baseline credit pool health
+    credit_state = floe_client.get_credit_remaining()
+    current_utilization = credit_state["utilizationBps"]
+    print(f"Credit Utilization: {current_utilization} bps")
 
-                print("Executing task...")
-                print("Task completed successfully")
+    if current_utilization > 8500:
+      print("Utilization ceiling reached. Freezing borrow pipeline.")
+      break
 
-            except Exception as e:
-                print("Error after borrowing:", str(e))
 
-        else:
-            print("Decision: Skip borrowing")
+    # Guardrail 2: Enforce local operational caps
+    if step["cost"] > SESSION_MAX_CAP:
+      print(f"Skipping: Cost ${step['cost']} breaches session limit.")
+      continue
+
+
+    if borrow(step["task_value"], step["cost"]):
+      print("Action approved: Profitable margin detected.")
+      try:
+        receipt = floe_client.instant_borrow(step["cost"])
+        print("Tx confirmed:", receipt)
+        print("Pipeline tasks resolved successfully.")
+      except floe_client.FloeAPIError as err:
+        print(f"Floe protocol execution aborted: {err}")
+      except Exception as err:  
+        print(f"Unexpected system error: {err}")
+    else:
+      print("Action rejected: Insufficient profit margin.")
+
 
 if __name__ == "__main__":
-    run()
+  run()
